@@ -1,0 +1,42 @@
+{
+  "name": "oido-shopify",
+  "version": "1.0.0",
+  "description": "Manage a Shopify store — products, orders, customers and inventory — via MCP, using the Admin GraphQL API and a custom-app access token.",
+  "runtime": "make build",
+  "mcpServers": {
+    "oido-shopify": {
+      "command": "${extensionPath}/oido-shopify-mcp",
+      "args": [],
+      "env": {
+        "SHOPIFY_STORE": "${SHOPIFY_STORE}",
+        "SHOPIFY_ACCESS_TOKEN": "${SHOPIFY_ACCESS_TOKEN}",
+        "SHOPIFY_API_VERSION": "${SHOPIFY_API_VERSION}"
+      }
+    }
+  },
+  "contextFileName": "OIDO.md",
+  "excludeTools": [],
+  "settings": [
+    {
+      "name": "SHOPIFY_STORE",
+      "description": "Store domain, e.g. acme.myshopify.com (the permanent myshopify.com domain, not a custom domain)",
+      "defaultValue": "",
+      "type": "string",
+      "sensitive": false
+    },
+    {
+      "name": "SHOPIFY_ACCESS_TOKEN",
+      "description": "Admin API access token (shpat_…) from a custom app in Shopify admin",
+      "defaultValue": "",
+      "type": "string",
+      "sensitive": true
+    },
+    {
+      "name": "SHOPIFY_API_VERSION",
+      "description": "Admin API version, e.g. 2026-07. Leave empty for the plugin default.",
+      "defaultValue": "",
+      "type": "string",
+      "sensitive": false
+    }
+  ]
+}
