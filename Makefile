@@ -1,4 +1,4 @@
-.PHONY: build clean test
+.PHONY: build clean test validate
 
 PLUGIN_NAME := oido-shopify
 BINARY := $(PLUGIN_NAME)-mcp
@@ -13,3 +13,7 @@ test:
 
 clean:
 	rm -f $(BINARY)
+
+# Check every GraphQL document and its variables against Shopify's schema.
+validate:
+	./scripts/validate.sh

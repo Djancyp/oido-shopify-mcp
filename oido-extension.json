@@ -1,7 +1,7 @@
 {
   "name": "oido-shopify",
-  "version": "1.0.0",
-  "description": "Manage a Shopify store — products, orders, customers and inventory — via MCP, using the Admin GraphQL API (Dev Dashboard client credentials, or a legacy custom-app token).",
+  "version": "1.1.0",
+  "description": "Build and run a Shopify store from empty to production — theme, catalog, collections, pages, navigation, policies, shipping, discounts, orders, fulfillment and customers — via MCP, using the Admin GraphQL API (Dev Dashboard client credentials, or a legacy custom-app token).",
   "runtime": "make build",
   "mcpServers": {
     "oido-shopify": {

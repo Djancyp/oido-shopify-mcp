@@ -125,6 +125,9 @@ func exchangeToken(ctx context.Context, hc *http.Client, endpoint string, form u
 // newClient reads the store settings and resolves an Admin API token: either a
 // static SHOPIFY_ACCESS_TOKEN (legacy custom app) or SHOPIFY_CLIENT_ID +
 // SHOPIFY_CLIENT_SECRET (Dev Dashboard app, exchanged for a 24h token).
+// endpointOverride redirects GraphQL requests; set only by tests.
+var endpointOverride string
+
 func newClient(ctx context.Context) (*client, error) {
 	rawStore := os.Getenv("SHOPIFY_STORE")
 	tok := strings.TrimSpace(os.Getenv("SHOPIFY_ACCESS_TOKEN"))
@@ -153,8 +156,12 @@ func newClient(ctx context.Context) (*client, error) {
 			return nil, err
 		}
 	}
+	endpoint := fmt.Sprintf("https://%s/admin/api/%s/graphql.json", store, ver)
+	if endpointOverride != "" {
+		endpoint = endpointOverride
+	}
 	return &client{
-		endpoint: fmt.Sprintf("https://%s/admin/api/%s/graphql.json", store, ver),
+		endpoint: endpoint,
 		version:  ver,
 		token:    tok,
 		http:     hc,
@@ -168,43 +175,57 @@ type gqlError struct {
 	} `json:"extensions"`
 }
 
-// gql runs one query or mutation and returns the `data` field as indented JSON.
+// gql runs one query or mutation and returns the `data` field as indented JSON,
+// truncated for the model's context.
+func (c *client) gql(ctx context.Context, query string, vars map[string]any) (string, error) {
+	data, err := c.gqlData(ctx, query, vars)
+	if err != nil {
+		return "", err
+	}
+	pretty, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode data: %w", err)
+	}
+	return truncate(string(pretty)), nil
+}
+
+// gqlData runs one query or mutation and returns the decoded `data` field.
 // GraphQL-level errors and mutation userErrors are returned as Go errors, since
 // Shopify reports them with HTTP 200.
-func (c *client) gql(ctx context.Context, query string, vars map[string]any) (string, error) {
+func (c *client) gqlData(ctx context.Context, query string, vars map[string]any) (any, error) {
 	payload, err := json.Marshal(map[string]any{"query": query, "variables": vars})
 	if err != nil {
-		return "", fmt.Errorf("encode request: %w", err)
+		return nil, fmt.Errorf("encode request: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(payload))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req.Header.Set("X-Shopify-Access-Token", c.token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("shopify %s: %s", resp.Status, truncate(string(body)))
+		return nil, fmt.Errorf("shopify %s: %s", resp.Status, truncate(string(body)))
 	}
-	return parseResponse(body)
+	return decodeResponse(body)
 }
 
-func parseResponse(body []byte) (string, error) {
+func decodeResponse(body []byte) (any, error) {
 	var env struct {
 		Data   json.RawMessage `json:"data"`
 		Errors []gqlError      `json:"errors"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
+		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	if len(env.Errors) > 0 {
 		msgs := make([]string, 0, len(env.Errors))
@@ -215,21 +236,30 @@ func parseResponse(body []byte) (string, error) {
 			}
 			msgs = append(msgs, m)
 		}
-		return "", fmt.Errorf("shopify: %s", strings.Join(msgs, "; "))
+		return nil, fmt.Errorf("shopify: %s", strings.Join(msgs, "; "))
 	}
 	if len(env.Data) == 0 || string(env.Data) == "null" {
-		return "", fmt.Errorf("shopify returned no data")
+		return nil, fmt.Errorf("shopify returned no data")
 	}
 	var data any
 	if err := json.Unmarshal(env.Data, &data); err != nil {
-		return "", fmt.Errorf("decode data: %w", err)
+		return nil, fmt.Errorf("decode data: %w", err)
 	}
 	if msg := userErrors(data); msg != "" {
-		return "", fmt.Errorf("shopify rejected the request: %s", msg)
+		return nil, fmt.Errorf("shopify rejected the request: %s", msg)
+	}
+	return data, nil
+}
+
+// parseResponse decodes a response body into indented, truncated JSON.
+func parseResponse(body []byte) (string, error) {
+	data, err := decodeResponse(body)
+	if err != nil {
+		return "", err
 	}
 	pretty, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
-		return truncate(string(env.Data)), nil
+		return "", fmt.Errorf("encode data: %w", err)
 	}
 	return truncate(string(pretty)), nil
 }
@@ -239,7 +269,14 @@ func parseResponse(body []byte) (string, error) {
 func userErrors(v any) string {
 	switch t := v.(type) {
 	case map[string]any:
-		if arr, ok := t["userErrors"].([]any); ok && len(arr) > 0 {
+		for key, val := range t {
+			if !strings.HasSuffix(strings.ToLower(key), "usererrors") {
+				continue
+			}
+			arr, ok := val.([]any)
+			if !ok || len(arr) == 0 {
+				continue
+			}
 			parts := make([]string, 0, len(arr))
 			for _, e := range arr {
 				m, _ := e.(map[string]any)
@@ -319,4 +356,26 @@ func idempotencyKey() string {
 // correctly as text; "unstable" sorts after digits and is treated as new.
 func needsIdempotency(version string) bool {
 	return version >= idempotentSince
+}
+
+// gids converts a list of ids to global ids of one kind.
+func gids(kind string, ids []string) ([]string, error) {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		g, err := gid(kind, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, nil
+}
+
+// idempotent adds the @idempotent directive after call in doc when the API
+// version requires it for inventory mutations.
+func (c *client) idempotent(doc, call string) string {
+	if !needsIdempotency(c.version) {
+		return doc
+	}
+	return strings.Replace(doc, call, fmt.Sprintf("%s @idempotent(key: %q)", call, idempotencyKey()), 1)
 }

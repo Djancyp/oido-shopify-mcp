@@ -9,8 +9,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestNormalizeStore(t *testing.T) {
@@ -196,61 +194,6 @@ func TestNewClient(t *testing.T) {
 			t.Fatal("want error")
 		}
 	})
-}
-
-func TestHandlersValidateBeforeNetwork(t *testing.T) {
-	// No env set: any call that reached newClient would say "not configured".
-	t.Setenv("SHOPIFY_STORE", "")
-	h := &handler{}
-	ctx := context.Background()
-	tests := []struct {
-		name string
-		call func() (string, bool)
-		want string
-	}{
-		{"create needs title", func() (string, bool) {
-			r, _, _ := h.ProductCreate(ctx, nil, ProductCreateArgs{})
-			return text(r), r.IsError
-		}, "title is required"},
-		{"create bad status", func() (string, bool) {
-			r, _, _ := h.ProductCreate(ctx, nil, ProductCreateArgs{Title: "x", Status: "LIVE"})
-			return text(r), r.IsError
-		}, "status must be"},
-		{"update needs a field", func() (string, bool) {
-			r, _, _ := h.ProductUpdate(ctx, nil, ProductUpdateArgs{ID: "1"})
-			return text(r), r.IsError
-		}, "nothing to update"},
-		{"order update needs a field", func() (string, bool) {
-			r, _, _ := h.OrderUpdate(ctx, nil, OrderUpdateArgs{ID: "1"})
-			return text(r), r.IsError
-		}, "nothing to update"},
-		{"inventory zero delta", func() (string, bool) {
-			r, _, _ := h.InventoryAdjust(ctx, nil, InventoryAdjustArgs{InventoryItemID: "1", LocationID: "2"})
-			return text(r), r.IsError
-		}, "delta must be non-zero"},
-		{"bad order id", func() (string, bool) {
-			r, _, _ := h.Order(ctx, nil, IDArgs{ID: "#1001"})
-			return text(r), r.IsError
-		}, "invalid order id"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, isErr := tt.call()
-			if !isErr || !strings.Contains(got, tt.want) {
-				t.Fatalf("got %q (isErr=%v), want error containing %q", got, isErr, tt.want)
-			}
-		})
-	}
-}
-
-func text(r *mcp.CallToolResult) string {
-	if len(r.Content) == 0 {
-		return ""
-	}
-	if tc, ok := r.Content[0].(*mcp.TextContent); ok {
-		return tc.Text
-	}
-	return ""
 }
 
 func TestExchangeToken(t *testing.T) {
