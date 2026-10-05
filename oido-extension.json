@@ -1,7 +1,7 @@
 {
   "name": "oido-shopify",
   "version": "1.0.0",
-  "description": "Manage a Shopify store — products, orders, customers and inventory — via MCP, using the Admin GraphQL API and a custom-app access token.",
+  "description": "Manage a Shopify store — products, orders, customers and inventory — via MCP, using the Admin GraphQL API (Dev Dashboard client credentials, or a legacy custom-app token).",
   "runtime": "make build",
   "mcpServers": {
     "oido-shopify": {
@@ -9,6 +9,8 @@
       "args": [],
       "env": {
         "SHOPIFY_STORE": "${SHOPIFY_STORE}",
+        "SHOPIFY_CLIENT_ID": "${SHOPIFY_CLIENT_ID}",
+        "SHOPIFY_CLIENT_SECRET": "${SHOPIFY_CLIENT_SECRET}",
         "SHOPIFY_ACCESS_TOKEN": "${SHOPIFY_ACCESS_TOKEN}",
         "SHOPIFY_API_VERSION": "${SHOPIFY_API_VERSION}"
       }
@@ -25,8 +27,22 @@
       "sensitive": false
     },
     {
+      "name": "SHOPIFY_CLIENT_ID",
+      "description": "Client ID of your Dev Dashboard app (dev.shopify.com → app → Settings). The app and store must be in the same Shopify organization.",
+      "defaultValue": "",
+      "type": "string",
+      "sensitive": false
+    },
+    {
+      "name": "SHOPIFY_CLIENT_SECRET",
+      "description": "Client secret of your Dev Dashboard app",
+      "defaultValue": "",
+      "type": "string",
+      "sensitive": true
+    },
+    {
       "name": "SHOPIFY_ACCESS_TOKEN",
-      "description": "Admin API access token (shpat_…) from a custom app in Shopify admin",
+      "description": "Only for an existing legacy admin-created custom app: its Admin API token (shpat_…). Leave empty when using client ID/secret.",
       "defaultValue": "",
       "type": "string",
       "sensitive": true

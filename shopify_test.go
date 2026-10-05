@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -162,14 +163,16 @@ func TestNewClient(t *testing.T) {
 	t.Run("missing store", func(t *testing.T) {
 		t.Setenv("SHOPIFY_STORE", "")
 		t.Setenv("SHOPIFY_ACCESS_TOKEN", "t")
-		if _, err := newClient(); err == nil || !strings.Contains(err.Error(), "SHOPIFY_STORE") {
+		if _, err := newClient(context.Background()); err == nil || !strings.Contains(err.Error(), "SHOPIFY_STORE") {
 			t.Fatalf("err = %v", err)
 		}
 	})
 	t.Run("missing token", func(t *testing.T) {
 		t.Setenv("SHOPIFY_STORE", "acme")
 		t.Setenv("SHOPIFY_ACCESS_TOKEN", "")
-		if _, err := newClient(); err == nil || !strings.Contains(err.Error(), "SHOPIFY_ACCESS_TOKEN") {
+		t.Setenv("SHOPIFY_CLIENT_ID", "")
+		t.Setenv("SHOPIFY_CLIENT_SECRET", "")
+		if _, err := newClient(context.Background()); err == nil || !strings.Contains(err.Error(), "SHOPIFY_CLIENT_ID") {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -177,7 +180,7 @@ func TestNewClient(t *testing.T) {
 		t.Setenv("SHOPIFY_STORE", "acme")
 		t.Setenv("SHOPIFY_ACCESS_TOKEN", "t")
 		t.Setenv("SHOPIFY_API_VERSION", "")
-		c, err := newClient()
+		c, err := newClient(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -189,7 +192,7 @@ func TestNewClient(t *testing.T) {
 		t.Setenv("SHOPIFY_STORE", "acme")
 		t.Setenv("SHOPIFY_ACCESS_TOKEN", "t")
 		t.Setenv("SHOPIFY_API_VERSION", "../x")
-		if _, err := newClient(); err == nil {
+		if _, err := newClient(context.Background()); err == nil {
 			t.Fatal("want error")
 		}
 	})
@@ -248,4 +251,41 @@ func text(r *mcp.CallToolResult) string {
 		return tc.Text
 	}
 	return ""
+}
+
+func TestExchangeToken(t *testing.T) {
+	var got url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ct := r.Header.Get("Content-Type"); ct != "application/x-www-form-urlencoded" {
+			t.Errorf("content-type = %q", ct)
+		}
+		r.ParseForm()
+		got = r.PostForm
+		io.WriteString(w, `{"access_token":"shpat_new","scope":"read_products","expires_in":86399}`)
+	}))
+	defer srv.Close()
+
+	form := url.Values{"grant_type": {"client_credentials"}, "client_id": {"id1"}, "client_secret": {"sec1"}}
+	tok, ttl, err := exchangeToken(context.Background(), srv.Client(), srv.URL, form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok != "shpat_new" || ttl.Hours() < 23 {
+		t.Errorf("tok=%q ttl=%v", tok, ttl)
+	}
+	if got.Get("grant_type") != "client_credentials" || got.Get("client_id") != "id1" || got.Get("client_secret") != "sec1" {
+		t.Errorf("form = %v", got)
+	}
+
+	t.Run("rejected", func(t *testing.T) {
+		bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"error":"invalid_client"}`)
+		}))
+		defer bad.Close()
+		_, _, err := exchangeToken(context.Background(), bad.Client(), bad.URL, form)
+		if err == nil || !strings.Contains(err.Error(), "invalid_client") || !strings.Contains(err.Error(), "same Shopify organization") {
+			t.Fatalf("err = %v", err)
+		}
+	})
 }

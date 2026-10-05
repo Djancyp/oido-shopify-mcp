@@ -71,7 +71,7 @@ func errResult(err error) *mcp.CallToolResult {
 // run is the shared shape of every tool: build a client, issue one GraphQL
 // request, return its JSON.
 func run(ctx context.Context, query string, vars map[string]any) (*mcp.CallToolResult, any, error) {
-	c, err := newClient()
+	c, err := newClient(ctx)
 	if err != nil {
 		return errResult(err), nil, nil
 	}
@@ -312,7 +312,7 @@ func (h *handler) InventoryAdjust(ctx context.Context, _ *mcp.CallToolRequest, a
 	if reason == "" {
 		reason = "correction"
 	}
-	c, err := newClient()
+	c, err := newClient(ctx)
 	if err != nil {
 		return errResult(err), nil, nil
 	}

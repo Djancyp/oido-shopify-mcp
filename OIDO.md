@@ -5,19 +5,29 @@ customers and inventory.
 
 ## Setup
 
-1. In Shopify admin: **Settings → Apps and sales channels → Develop apps →
-   Create an app**.
-2. **Configure Admin API scopes**: `read_products`, `write_products`,
-   `read_orders`, `write_orders`, `read_customers`, `read_inventory`,
-   `write_inventory`, `read_locations`. Drop the `write_*` ones for a read-only
-   setup. Add `read_all_orders` to see orders older than 60 days.
-3. **Install app**, then copy the **Admin API access token** (`shpat_…`) —
-   Shopify shows it once.
-4. Fill the extension settings:
+Shopify no longer lets you create admin-created custom apps, so use a
+**Dev Dashboard** app. This works for your own store: the app and the store must
+be in the same Shopify organization.
+
+1. Go to the [Dev Dashboard](https://dev.shopify.com), **Create app**.
+2. In a new app version, set the Admin API **scopes**: `read_products`,
+   `write_products`, `read_orders`, `write_orders`, `read_customers`,
+   `read_inventory`, `write_inventory`, `read_locations`. Drop the `write_*`
+   ones for read-only. Add `read_all_orders` to see orders older than 60 days.
+   Release the version.
+3. **Install** the app on your store from the Dev Dashboard.
+4. App **Settings** → copy the **Client ID** and **Client secret**.
+5. Fill the extension settings:
    - **SHOPIFY_STORE** — `acme.myshopify.com`
-   - **SHOPIFY_ACCESS_TOKEN** — the token
+   - **SHOPIFY_CLIENT_ID** / **SHOPIFY_CLIENT_SECRET** — from step 4
    - **SHOPIFY_API_VERSION** — optional, defaults to `2026-07`
-5. Save. Verify with `shopify_shop`.
+6. Save. Verify with `shopify_shop`.
+
+The plugin exchanges the client credentials for an Admin API token (valid 24 h)
+and renews it automatically.
+
+Already have a legacy custom app? Leave the client fields empty and set
+**SHOPIFY_ACCESS_TOKEN** to its `shpat_…` token instead.
 
 ## Tools
 

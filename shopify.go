@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -56,14 +58,83 @@ func normalizeStore(s string) (string, error) {
 	return s, nil
 }
 
-func newClient() (*client, error) {
+// tokenCache holds the client-credentials token between tool calls. The server
+// is a long-lived process and Shopify tokens last 24h, so one exchange serves
+// many calls.
+var tokenCache struct {
+	sync.Mutex
+	key     string
+	token   string
+	expires time.Time
+}
+
+// tokenRefreshMargin renews a token slightly early so it never expires mid-call.
+const tokenRefreshMargin = 5 * time.Minute
+
+// clientCredentialsToken exchanges a Dev Dashboard app's client id/secret for an
+// Admin API token. Only works when the app and store share a Shopify org.
+func clientCredentialsToken(ctx context.Context, hc *http.Client, store, id, secret string) (string, error) {
+	key := store + "|" + id + "|" + secret
+	tokenCache.Lock()
+	defer tokenCache.Unlock()
+	if tokenCache.key == key && tokenCache.token != "" && time.Now().Before(tokenCache.expires) {
+		return tokenCache.token, nil
+	}
+	form := url.Values{"grant_type": {"client_credentials"}, "client_id": {id}, "client_secret": {secret}}
+	tok, ttl, err := exchangeToken(ctx, hc, fmt.Sprintf("https://%s/admin/oauth/access_token", store), form)
+	if err != nil {
+		return "", err
+	}
+	tokenCache.key, tokenCache.token = key, tok
+	tokenCache.expires = time.Now().Add(ttl - tokenRefreshMargin)
+	return tok, nil
+}
+
+func exchangeToken(ctx context.Context, hc *http.Client, endpoint string, form url.Values) (string, time.Duration, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", 0, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := hc.Do(req)
+	if err != nil {
+		return "", 0, fmt.Errorf("token exchange: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", 0, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", 0, fmt.Errorf("token exchange %s: %s — check SHOPIFY_CLIENT_ID/SECRET, that the app is installed on the store, and that the app and store are in the same Shopify organization", resp.Status, truncate(string(body)))
+	}
+	var out struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || out.AccessToken == "" {
+		return "", 0, fmt.Errorf("token exchange: unexpected response")
+	}
+	ttl := time.Duration(out.ExpiresIn) * time.Second
+	if ttl <= tokenRefreshMargin {
+		ttl = 24 * time.Hour
+	}
+	return out.AccessToken, ttl, nil
+}
+
+// newClient reads the store settings and resolves an Admin API token: either a
+// static SHOPIFY_ACCESS_TOKEN (legacy custom app) or SHOPIFY_CLIENT_ID +
+// SHOPIFY_CLIENT_SECRET (Dev Dashboard app, exchanged for a 24h token).
+func newClient(ctx context.Context) (*client, error) {
 	rawStore := os.Getenv("SHOPIFY_STORE")
 	tok := strings.TrimSpace(os.Getenv("SHOPIFY_ACCESS_TOKEN"))
+	clientID := strings.TrimSpace(os.Getenv("SHOPIFY_CLIENT_ID"))
+	clientSecret := strings.TrimSpace(os.Getenv("SHOPIFY_CLIENT_SECRET"))
 	if strings.TrimSpace(rawStore) == "" {
 		return nil, fmt.Errorf("not configured: SHOPIFY_STORE is empty — set it to your store domain, e.g. acme.myshopify.com")
 	}
-	if tok == "" {
-		return nil, fmt.Errorf("not configured: SHOPIFY_ACCESS_TOKEN is empty — create a custom app in Shopify admin (Settings → Apps → Develop apps) and paste its Admin API access token")
+	if tok == "" && (clientID == "" || clientSecret == "") {
+		return nil, fmt.Errorf("not configured: set SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET (Dev Dashboard app → Settings), or SHOPIFY_ACCESS_TOKEN for an existing legacy custom app")
 	}
 	store, err := normalizeStore(rawStore)
 	if err != nil {
@@ -76,11 +147,17 @@ func newClient() (*client, error) {
 	if !versionRe.MatchString(ver) {
 		return nil, fmt.Errorf("SHOPIFY_API_VERSION %q is not a valid version, expected e.g. %s", ver, defaultAPIVersion)
 	}
+	hc := &http.Client{Timeout: httpTimeout}
+	if tok == "" {
+		if tok, err = clientCredentialsToken(ctx, hc, store, clientID, clientSecret); err != nil {
+			return nil, err
+		}
+	}
 	return &client{
 		endpoint: fmt.Sprintf("https://%s/admin/api/%s/graphql.json", store, ver),
 		version:  ver,
 		token:    tok,
-		http:     &http.Client{Timeout: httpTimeout},
+		http:     hc,
 	}, nil
 }
 
